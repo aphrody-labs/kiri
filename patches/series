@@ -1,2 +1,4 @@
 # Applied in order with git am --3way onto upstream main by fw-nt/tools/sync.ts (branch aphrody) and onto the release tag by aphrody-release.yml.
 0001-ci-aphrody-release.patch
+0002-test-conflict-a.patch
+0003-test-conflict-b.patch

@@ -1,0 +1,23 @@
+From fae671b353b2b8e5e2b80d5d0ed1a7bbd36dcdd1 Mon Sep 17 00:00:00 2001
+From: aphrody-dev <yohanpierre15@gmail.com>
+Date: Fri, 20 Nov 2026 20:45:06 +0100
+Subject: [PATCH] test: conflict gate B
+
+Upstream-Status: carry
+---
+ README.md | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/README.md b/README.md
+index 87d6b62..e7cd71f 100644
+--- a/README.md
++++ b/README.md
+@@ -1,4 +1,4 @@
+-<p align="center">
++# Kiri (gate B)
+   <picture>
+     <source media="(prefers-color-scheme: dark)" srcset="brand/logo/kiri-horizontal-dark.svg">
+     <img src="brand/logo/kiri-horizontal-light.svg" alt="Kiri" width="220">
+-- 
+2.56.0.windows.4.niugit
+
