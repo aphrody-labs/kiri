@@ -1,0 +1,98 @@
+name: aphrody release
+
+# Builds the static Linux engine from the newest upstream tag plus the series of the `patches` branch and publishes it as
+# kiri-<upstream tag>-aphrody.<n> with SHA-256 files. Starts when fw-nt/tools/sync.ts pushes the generated `aphrody`
+# branch; a build of the same tag and series that is already released is skipped (the key is in the release notes).
+# Runs on a GitHub-hosted runner: no self-hosted runner of the build role is registered for this repository.
+on:
+  push:
+    branches: [aphrody]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: aphrody-release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: patches
+          path: patches
+      - name: Newest upstream tag, series key, release number
+        id: v
+        run: |
+          set -eu
+          parent=$(gh api "repos/$GITHUB_REPOSITORY" --jq .parent.full_name)
+          tag=$(git ls-remote --tags --refs "https://github.com/$parent.git" 'v*' | sed 's|.*refs/tags/||' | sort -V | tail -1)
+          [ -n "$tag" ] || { echo "no upstream tag in $parent" >&2; exit 1; }
+          tagsha=$(git ls-remote "https://github.com/$parent.git" "refs/tags/$tag^{}" "refs/tags/$tag" | tail -1 | cut -f1)
+          key=$( { echo "$tagsha"; cat patches/patches/series patches/patches/*.patch; } | sha256sum | cut -c1-16)
+          n=0
+          for t in $(gh release list --limit 300 --json tagName --jq '.[].tagName' | grep -F "kiri-$tag-aphrody." || true); do
+            if gh release view "$t" --json body --jq .body | grep -q "build-key: $key"; then echo "$t already carries build-key $key"; echo "skip=true" >> "$GITHUB_OUTPUT"; fi
+            m=${t##*.}; [ "$m" -gt "$n" ] && n=$m
+          done
+          n=$((n + 1))
+          { echo "parent=$parent"; echo "tag=$tag"; echo "key=$key"; echo "release=kiri-$tag-aphrody.$n"; } >> "$GITHUB_OUTPUT"
+          cat "$GITHUB_OUTPUT"
+      - name: Upstream tag plus the series
+        if: steps.v.outputs.skip != 'true'
+        run: |
+          set -eu
+          git clone -q --filter=blob:none --branch "${{ steps.v.outputs.tag }}" "https://github.com/${{ steps.v.outputs.parent }}.git" src
+          cd src
+          git config user.name aphrody-release
+          git config user.email aphrody-release@users.noreply.github.com
+          for p in $(grep -v '^#' ../patches/patches/series); do
+            git am --3way --committer-date-is-author-date "../patches/patches/$p"
+          done
+          v=${{ steps.v.outputs.tag }}
+          sed -i "0,/^version = \"0.0.0\"/s//version = \"${v#v}\"/" Cargo.toml
+          git log --oneline | head -20
+      - name: Static engine (musl, zig cc) and the pinned docker CLI, Compose and buildx
+        if: steps.v.outputs.skip != 'true'
+        working-directory: src
+        run: |
+          set -eu
+          bash scripts/windows-engine.sh "$PWD" "$PWD/target/engine" x86_64
+          bash packaging/linux/fetch-cli.sh "$PWD/target/cli" "$HOME/.cache/kiri-linux-cli" x86_64
+          ls -l target/engine target/cli
+      - name: tests/linux-host.sh against the built engine
+        if: steps.v.outputs.skip != 'true'
+        working-directory: src
+        run: BIN="$PWD/target/engine" bash tests/linux-host.sh
+      - name: Package, hash, publish
+        if: steps.v.outputs.skip != 'true'
+        working-directory: src
+        run: |
+          set -eu
+          rel=${{ steps.v.outputs.release }}
+          name=$rel-linux-x86_64
+          d=target/pkg/$name
+          mkdir -p "$d/bin" "$d/libexec/cli-plugins" "$d/share"
+          install -m 755 target/engine/kiri target/engine/kiri-init "$d/bin/"
+          install -m 755 target/cli/docker "$d/libexec/docker"
+          install -m 755 target/cli/docker-compose target/cli/docker-buildx "$d/libexec/cli-plugins/"
+          install -m 755 packaging/linux/docker-wrapper "$d/share/docker-wrapper"
+          install -m 644 packaging/linux/kiri.service "$d/share/kiri.service"
+          install -m 644 LICENSE NOTICE "$d/"
+          tar -C target/pkg --owner=0 --group=0 -czf "target/pkg/$name.tar.gz" "$name"
+          cd target/pkg
+          sha256sum "$name.tar.gz" > "$name.tar.gz.sha256"
+          cp "$name.tar.gz.sha256" SHA256SUMS
+          cat SHA256SUMS
+          cat > notes.md <<EOF
+          Unofficial build of ${{ steps.v.outputs.parent }} ${{ steps.v.outputs.tag }} with the series of the \`patches\` branch of this repository
+          (commit ${GITHUB_SHA}). Static x86-64 Linux engine and the pinned docker CLI, Compose and buildx; no window, no icons.
+          build-key: ${{ steps.v.outputs.key }}
+          EOF
+          gh release create "$rel" "$name.tar.gz" "$name.tar.gz.sha256" SHA256SUMS --target "$GITHUB_SHA" --title "$rel" --notes-file notes.md
